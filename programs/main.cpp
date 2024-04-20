@@ -37,6 +37,9 @@ int mainEntryClickHouseBenchmark(int argc, char ** argv);
 #if ENABLE_CLICKHOUSE_EXTRACT_FROM_CONFIG
 int mainEntryClickHouseExtractFromConfig(int argc, char ** argv);
 #endif
+#if ENABLE_CLICKHOUSE_AVX_SIP_TESTING
+int mainEntryClickHouseSipHashAVX(int argc, char ** argv);
+#endif
 #if ENABLE_CLICKHOUSE_COMPRESSOR
 int mainEntryClickHouseCompressor(int argc, char ** argv);
 #endif
@@ -110,6 +113,9 @@ std::pair<std::string_view, MainFunc> clickhouse_applications[] =
 #endif
 #if ENABLE_CLICKHOUSE_EXTRACT_FROM_CONFIG
     {"extract-from-config", mainEntryClickHouseExtractFromConfig},
+#endif
+#if ENABLE_CLICKHOUSE_AVX_SIP_TESTING
+    {"avx-sip-testing", mainEntryClickHouseSipHashAVX},
 #endif
 #if ENABLE_CLICKHOUSE_COMPRESSOR
     {"compressor", mainEntryClickHouseCompressor},

@@ -432,6 +432,7 @@ int mainEntryClickHouseInstall(int argc, char ** argv)
             "clickhouse-compressor",
             "clickhouse-format",
             "clickhouse-extract-from-config",
+            "clickhouse-avx-sip-testing",
             "clickhouse-keeper",
             "clickhouse-keeper-converter",
             "clickhouse-disks",
