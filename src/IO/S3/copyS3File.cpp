@@ -58,10 +58,10 @@ namespace
             const String & dest_key_,
             const S3Settings::RequestSettings & request_settings_,
             const std::optional<std::map<String, String>> & object_metadata_,
-            ThreadPoolCallbackRunner<void> schedule_,
+            ThreadPoolCallbackRunnerUnsafe<void> schedule_,
             bool for_disk_s3_,
             BlobStorageLogWriterPtr blob_storage_log_,
-            const Poco::Logger * log_)
+            const LoggerPtr log_)
             : client_ptr(client_ptr_)
             , dest_bucket(dest_bucket_)
             , dest_key(dest_key_)
@@ -84,10 +84,10 @@ namespace
         const S3Settings::RequestSettings & request_settings;
         const S3Settings::RequestSettings::PartUploadSettings & upload_settings;
         const std::optional<std::map<String, String>> & object_metadata;
-        ThreadPoolCallbackRunner<void> schedule;
+        ThreadPoolCallbackRunnerUnsafe<void> schedule;
         bool for_disk_s3;
         BlobStorageLogWriterPtr blob_storage_log;
-        const Poco::Logger * log;
+        const LoggerPtr log;
 
         /// Represents a task uploading a single part.
         /// Keep this struct small because there can be thousands of parts.
@@ -193,11 +193,6 @@ namespace
                     ProfileEvents::increment(ProfileEvents::DiskS3CompleteMultipartUpload);
 
                 auto outcome = client_ptr->CompleteMultipartUpload(request);
-
-                if (blob_storage_log)
-                    blob_storage_log->addEvent(BlobStorageLogElement::EventType::MultiPartUploadComplete,
-                                               dest_bucket, dest_key, /* local_path_ */ {}, /* data_size */ 0,
-                                               outcome.IsSuccess() ? nullptr : &outcome.GetError());
 
                 if (blob_storage_log)
                     blob_storage_log->addEvent(BlobStorageLogElement::EventType::MultiPartUploadComplete,
@@ -472,10 +467,10 @@ namespace
             const String & dest_key_,
             const S3Settings::RequestSettings & request_settings_,
             const std::optional<std::map<String, String>> & object_metadata_,
-            ThreadPoolCallbackRunner<void> schedule_,
+            ThreadPoolCallbackRunnerUnsafe<void> schedule_,
             bool for_disk_s3_,
             BlobStorageLogWriterPtr blob_storage_log_)
-            : UploadHelper(client_ptr_, dest_bucket_, dest_key_, request_settings_, object_metadata_, schedule_, for_disk_s3_, blob_storage_log_, &Poco::Logger::get("copyDataToS3File"))
+            : UploadHelper(client_ptr_, dest_bucket_, dest_key_, request_settings_, object_metadata_, schedule_, for_disk_s3_, blob_storage_log_, getLogger("copyDataToS3File"))
             , create_read_buffer(create_read_buffer_)
             , offset(offset_)
             , size(size_)
@@ -655,10 +650,10 @@ namespace
             const S3Settings::RequestSettings & request_settings_,
             const ReadSettings & read_settings_,
             const std::optional<std::map<String, String>> & object_metadata_,
-            ThreadPoolCallbackRunner<void> schedule_,
+            ThreadPoolCallbackRunnerUnsafe<void> schedule_,
             bool for_disk_s3_,
             BlobStorageLogWriterPtr blob_storage_log_)
-            : UploadHelper(client_ptr_, dest_bucket_, dest_key_, request_settings_, object_metadata_, schedule_, for_disk_s3_, blob_storage_log_, &Poco::Logger::get("copyS3File"))
+            : UploadHelper(client_ptr_, dest_bucket_, dest_key_, request_settings_, object_metadata_, schedule_, for_disk_s3_, blob_storage_log_, getLogger("copyS3File"))
             , src_bucket(src_bucket_)
             , src_key(src_key_)
             , offset(src_offset_)
@@ -746,7 +741,12 @@ namespace
                     break;
                 }
 
-                if (outcome.GetError().GetExceptionName() == "EntityTooLarge" || outcome.GetError().GetExceptionName() == "InvalidRequest" || outcome.GetError().GetExceptionName() == "InvalidArgument")
+                if (outcome.GetError().GetExceptionName() == "EntityTooLarge" ||
+                    outcome.GetError().GetExceptionName() == "InvalidRequest" ||
+                    outcome.GetError().GetExceptionName() == "InvalidArgument" ||
+                    (outcome.GetError().GetExceptionName() == "InternalError" &&
+                        outcome.GetError().GetResponseCode() == Aws::Http::HttpResponseCode::GATEWAY_TIMEOUT &&
+                        outcome.GetError().GetMessage().contains("use the Rewrite method in the JSON API")))
                 {
                     if (!supports_multipart_copy)
                     {
@@ -856,7 +856,7 @@ void copyDataToS3File(
     const S3Settings::RequestSettings & settings,
     BlobStorageLogWriterPtr blob_storage_log,
     const std::optional<std::map<String, String>> & object_metadata,
-    ThreadPoolCallbackRunner<void> schedule,
+    ThreadPoolCallbackRunnerUnsafe<void> schedule,
     bool for_disk_s3)
 {
     CopyDataToFileHelper helper{create_read_buffer, offset, size, dest_s3_client, dest_bucket, dest_key, settings, object_metadata, schedule, for_disk_s3, blob_storage_log};
@@ -876,7 +876,7 @@ void copyS3File(
     const ReadSettings & read_settings,
     BlobStorageLogWriterPtr blob_storage_log,
     const std::optional<std::map<String, String>> & object_metadata,
-    ThreadPoolCallbackRunner<void> schedule,
+    ThreadPoolCallbackRunnerUnsafe<void> schedule,
     bool for_disk_s3)
 {
     if (settings.allow_native_copy)
