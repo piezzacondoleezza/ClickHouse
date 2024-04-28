@@ -83,6 +83,14 @@ constexpr UInt64 getValWithoutByte(UInt64 byte) {
 class SipHash
 {
 private:
+    static void print(std::string debug, __m256i res) {
+        std::array<UInt64, 4> arr = {static_cast<UInt64>(_mm256_extract_epi64(res, 0)), static_cast<UInt64>(_mm256_extract_epi64(res, 1)),static_cast<UInt64>(_mm256_extract_epi64(res, 2)), static_cast<UInt64>(_mm256_extract_epi64(res, 3))};
+        for (size_t i = 0; i < arr.size(); ++i) {
+            std::cout << debug << ": " << arr[i] << std::endl;
+        }
+        return;
+    }
+
     /// State.
     UInt64 v0;
     UInt64 v1;
@@ -95,8 +103,7 @@ private:
     __m256i v3_avx;
 
     __m256i current_bytes_avx;
- 
- 
+  
     /// How many bytes have been processed.
     UInt64 cnt;
  
@@ -176,6 +183,7 @@ public:
         v2_avx = _mm256_set_epi64x(v2, v2, v2, v2);
         v3_avx = _mm256_set_epi64x(v3, v3, v3, v3);
  
+        print("after fill", v0_avx);
  
         cnt = 0;
         current_word = 0;
@@ -191,7 +199,8 @@ public:
     __attribute__((__target__("avx512vl,avx512f,avx512bw"))) ALWAYS_INLINE void updateSameLength(std::array<StringPtr, 4> data, UInt64 size)
     {
         UInt64 inc = 0;
- 
+         print("start update same length", v0_avx);
+
         /// We'll finish to process the remainder of the previous update, if any.
 
         /// попробуем тут обрабатывать втупую для каждой строчки
@@ -234,6 +243,8 @@ public:
         }
  
         cnt += size - inc;
+
+        print("after preprocessing", v0_avx);
  
         UInt64 padding = 0;
         while (inc + 8 <= size)
@@ -244,25 +255,39 @@ public:
                 unalignedLoadLittleEndian<UInt64>(data[2].data),
                 unalignedLoadLittleEndian<UInt64>(data[3].data)
             );
- 
-            v3_avx ^= current_bytes_avx;
-        v0_avx = _mm256_add_epi64(v0_avx, v1_avx);                  
+            print("after iteration upload, current bytes", current_bytes_avx);
+
+        v0_avx = _mm256_add_epi64(v0_avx, v1_avx);
+            print("check v0_avx after iteration before XOR", v0_avx);
+
         v1_avx = _mm256_rol_epi64(v1_avx, 13);                      
         v1_avx = _mm256_xor_epi64(v1_avx, v0_avx);                  
-        v0_avx = _mm256_rol_epi64(v0_avx, 32);                      
+        v0_avx = _mm256_rol_epi64(v0_avx, 32);     
+            print("check v0_avx after iteration before XOR", v0_avx);
+
         v2_avx = _mm256_add_epi64(v2_avx, v3_avx);                  
         v3_avx = _mm256_rol_epi64(v3_avx, 16);                      
         v3_avx = _mm256_xor_epi64(v3_avx, v2_avx);                  
-        v0_avx = _mm256_add_epi64(v0_avx, v3_avx);                  
+        v0_avx = _mm256_add_epi64(v0_avx, v3_avx);   
+            print("check v0_avx after iteration before XOR", v0_avx);
+
         v3_avx = _mm256_rol_epi64(v3_avx, 21);                      
         v3_avx = _mm256_xor_epi64(v3_avx, v0_avx);                  
-        v2_avx = _mm256_add_epi64(v2_avx, v1_avx);                 
+        v2_avx = _mm256_add_epi64(v2_avx, v1_avx);                  
         v1_avx = _mm256_rol_epi64(v1_avx, 17);                      
         v1_avx = _mm256_xor_epi64(v1_avx, v2_avx);                  
         v2_avx = _mm256_rol_epi64(v2_avx, 32);                      
-            SIPROUND_AVX;
+
+
+
+//            SIPROUND_AVX;
+            print("after iteration SIPROUND_AVX", current_bytes_avx);
+            print("check v0_avx after iteration before XOR", v0_avx);
+
+
             v0_avx ^= current_bytes_avx;
  
+            print("check v0_avx after iteration", v0_avx);
             inc += 8;
             padding += 8;
         }
@@ -306,20 +331,20 @@ public:
                 current_bytes_avx |= _mm256_set_epi64x(data[0].data[2]<< x, data[1].data[2]<< x, data[2].data[2]<< x, data[3].data[2]<< x);
             }[[fallthrough]];
             case 2: {
-                UInt64 x = 8 * CURRENT_BYTES_IDX(2);
-                UInt64 vl = MAX64 ^ (255ull << x);
-                current_bytes_avx &= _mm256_set_epi64x(vl, vl, vl, vl);
-                current_bytes_avx |= _mm256_set_epi64x(data[0].data[2]<< x, data[1].data[2]<< x, data[2].data[2]<< x, data[3].data[2]<< x);
-            }[[fallthrough]];
-            case 1: {
                 UInt64 x = 8 * CURRENT_BYTES_IDX(1);
                 UInt64 vl = MAX64 ^ (255ull << x);
                 current_bytes_avx &= _mm256_set_epi64x(vl, vl, vl, vl);
                 current_bytes_avx |= _mm256_set_epi64x(data[0].data[1]<< x, data[1].data[1]<< x, data[2].data[1]<< x, data[3].data[1]<< x);
+            }[[fallthrough]];
+            case 1: {
+                UInt64 x = 8 * CURRENT_BYTES_IDX(0);
+                UInt64 vl = MAX64 ^ (255ull << x);
+                current_bytes_avx &= _mm256_set_epi64x(vl, vl, vl, vl);
+                current_bytes_avx |= _mm256_set_epi64x(data[0].data[0]<< x, data[1].data[0]<< x, data[2].data[0]<< x, data[3].data[0]<< x);
             } [[fallthrough]];
             case 0: break;
         }
-
+        print("after update current bytes avx", current_bytes_avx);
     }
 
     ALWAYS_INLINE void update(const char * data, UInt64 size)
@@ -404,8 +429,20 @@ public:
 
     __attribute__((__target__("avx512vl,avx512f,avx512bw"))) ALWAYS_INLINE std::array<UInt64, 4> get64Array()
     {
+        print("before finalize v0_avx", v0_avx);
+        print("before finalize v1_avx", v1_avx);
+        print("before finalize v2_avx", v2_avx);
+        print("before finalize v3_avx", v3_avx);
+
         finalize_array();
+        print("after finalize v0_avx", v0_avx);
+        print("after finalize v1_avx", v1_avx);
+        print("after finalize v2_avx", v2_avx);
+        print("after finalize v3_avx", v3_avx);
+
         __m256i res = v0_avx ^ v1_avx ^ v2_avx ^ v3_avx;
+
+        print("before drop result", res);
         return {static_cast<UInt64>(_mm256_extract_epi64(res, 0)), static_cast<UInt64>(_mm256_extract_epi64(res, 1)),static_cast<UInt64>(_mm256_extract_epi64(res, 2)), static_cast<UInt64>(_mm256_extract_epi64(res, 3))};
     }
  
@@ -509,7 +546,7 @@ inline UInt64 sipHash64Keyed(UInt64 key0, UInt64 key1, const char * data, const 
 
 __attribute__((__target__("avx512vl,avx512f,avx512bw"))) inline std::array<UInt64, 4> sipHash64ArrayStr(std::array<const char*, 4> data, const size_t size)
 {
-    SipHash hash;
+    SipHash hash(0, 0);
     std::array<SipHash::StringPtr, 4> data1;
     for (size_t i = 0; i < 4; ++i) {
         data1[i].data = data[i];
