@@ -14,6 +14,7 @@
   */
  
  
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <string>
@@ -30,6 +31,7 @@
  
 #include <immintrin.h>
  
+ #include <iostream>
  
  
 namespace DB::ErrorCodes
@@ -64,6 +66,17 @@ namespace DB::ErrorCodes
         v1_avx = _mm256_xor_epi64(v1_avx, v2_avx);                  \
         v2_avx = _mm256_rol_epi64(v2_avx, 32);                      \
     } while(0)
+
+
+#define SIPROUND_ARR(i)                                                 \
+    do                                                            \
+    {                                                             \
+        v0_arr[i] += v1_arr[i]; v1_arr[i] = std::rotl(v1_arr[i], 13); v1_arr[i] ^= v0_arr[i]; v0_arr[i] = std::rotl(v0_arr[i], 32); \
+        v2_arr[i] += v3_arr[i]; v3_arr[i] = std::rotl(v3_arr[i], 16); v3_arr[i] ^= v2_arr[i];                    \
+        v0_arr[i] += v3_arr[i]; v3_arr[i] = std::rotl(v3_arr[i], 21); v3_arr[i] ^= v0_arr[i];                    \
+        v2_arr[i] += v1_arr[i]; v1_arr[i] = std::rotl(v1_arr[i], 17); v1_arr[i] ^= v2_arr[i]; v2_arr[i] = std::rotl(v2_arr[i], 32); \
+    } while(0)
+
  
  
 /// Define macro CURRENT_BYTES_IDX for building index used in current_bytes array
@@ -80,7 +93,7 @@ constexpr UInt64 getValWithoutByte(UInt64 byte) {
     return MAX64 ^ (15 << (8 * byte));
 }
  
-class SipHash
+class SipHashAvx
 {
 private:
     static void print(std::string debug, __m256i res) {
@@ -102,6 +115,13 @@ private:
     __m256i v2_avx;
     __m256i v3_avx;
 
+    UInt64 v0_arr[4];
+    UInt64 v1_arr[4];
+    UInt64 v2_arr[4];
+    UInt64 v3_arr[4];
+
+    UInt64 cnt_arr[4];
+
     __m256i current_bytes_avx;
   
     /// How many bytes have been processed.
@@ -116,12 +136,32 @@ private:
         UInt64 current_word;
         UInt8 current_bytes[8];
     };
+    union
+    {
+        UInt64 current_word_1;
+        UInt8 current_bytes_1[8];
+    };
+    union
+    {
+        UInt64 current_word_2;
+        UInt8 current_bytes_2[8];
+    };
+    union
+    {
+        UInt64 current_word_3;
+        UInt8 current_bytes_3[8];
+    };
+
+
  
     ALWAYS_INLINE void finalize()
     {
         /// In the last free byte, we write the remainder of the division by 256.
+        //std::cout << "current word before finalize1 : " << current_word << std::endl;
         current_bytes[CURRENT_BYTES_IDX(7)] = static_cast<UInt8>(cnt);
+        //std::cout << "cnt: " << cnt << std::endl;
  
+        //std::cout << "current word before finalize: " << current_word << std::endl;
         v3 ^= current_word;
         SIPROUND;
         SIPROUND;
@@ -138,14 +178,61 @@ private:
         SIPROUND;
     }
 
+    ALWAYS_INLINE void finalize_array_all_len()
+    {
+        for (int i = 0; i < 4; ++i) {
+            UInt8* cur_bytes_tmp;
+            UInt64* cur_word_tmp = &current_word;
+            if (i == 0) {
+                cur_word_tmp = &current_word;
+                cur_bytes_tmp = current_bytes;
+            } else if (i == 1) {
+                cur_word_tmp = &current_word_1;
+                cur_bytes_tmp = current_bytes_1;
+            } else if (i == 2) {
+                cur_word_tmp = &current_word_2;
+                cur_bytes_tmp = current_bytes_2;
+            } else {
+                cur_word_tmp = &current_word_3;
+                cur_bytes_tmp = current_bytes_3;
+            }
+            /// In the last free byte, we write the remainder of the division by 256.
+            //std::cout << "current word before finalize1 : " << current_word << std::endl;
+            cur_bytes_tmp[CURRENT_BYTES_IDX(7)] = static_cast<UInt8>(cnt_arr[i]);
+            //std::cout << "cnt: " << cnt << std::endl;
+    
+            //std::cout << "current word before finalize: " << current_word << std::endl;
+            v3_arr[i] ^= *cur_word_tmp;
+            SIPROUND_ARR(i);
+            SIPROUND_ARR(i);
+            v0_arr[i] ^= *cur_word_tmp;
+    
+            if (is_reference_128)
+                v2_arr[i] ^= 0xee;
+            else
+                v2_arr[i] ^= 0xff;
+    
+            SIPROUND_ARR(i);
+            SIPROUND_ARR(i);
+            SIPROUND_ARR(i);
+            SIPROUND_ARR(i);
+        }
+    }
+
     __attribute__((__target__("avx512vl,avx512f,avx512bw"))) ALWAYS_INLINE void finalize_array()
     {
         /// In the last free byte, we write the remainder of the division by 256.
+
+        // 8 * 7 = 56
+        //print("currnt_word avx in finalize", current_bytes_avx);
+        //std::cout << "cnt avx: " << cnt << std::endl;
+
         UInt64 x = 8 * CURRENT_BYTES_IDX(7);
         UInt64 vl = MAX64 ^ (255ull << x);
         current_bytes_avx &= _mm256_set_epi64x(vl, vl, vl, vl);
         current_bytes_avx |= _mm256_set_epi64x(cnt << x, cnt << x, cnt << x, cnt << x);
 
+        //print("current_bytes_avx", current_bytes_avx); 
         v3_avx ^= current_bytes_avx;
         SIPROUND_AVX;
         SIPROUND_AVX;
@@ -166,9 +253,8 @@ public:
     };
  
     /// Arguments - seed.
-    __attribute__((__target__("avx512vl,avx512f,avx512bw"))) SipHash(UInt64 key0 = 0, UInt64 key1 = 0, bool is_reference_128_ = false) /// NOLINT
+    __attribute__((__target__("avx512vl,avx512f,avx512bw"))) SipHashAvx(UInt64 key0 = 0, UInt64 key1 = 0, bool is_reference_128_ = false) /// NOLINT
     {
-        /// Initialize the state with some random bytes and seed.
         v0 = 0x736f6d6570736575ULL ^ key0;
         v1 = 0x646f72616e646f6dULL ^ key1;
         v2 = 0x6c7967656e657261ULL ^ key0;
@@ -182,11 +268,21 @@ public:
         v1_avx = _mm256_set_epi64x(v1, v1, v1, v1);
         v2_avx = _mm256_set_epi64x(v2, v2, v2, v2);
         v3_avx = _mm256_set_epi64x(v3, v3, v3, v3);
- 
-        print("after fill", v0_avx);
- 
+  
         cnt = 0;
         current_word = 0;
+        current_word_1 = 0;
+        current_word_2 = 0;
+        current_word_3 = 0;
+        
+        for (int i = 0; i < 4; ++i) {
+            v0_arr[i] = v0;
+            v1_arr[i] = v1;
+            v2_arr[i] = v2;
+            v3_arr[i] = v3;
+            //v0_arr[i] = v1_arr[i] = v2_arr[i] = v3_arr[i] = cnt_arr[i] = 0;
+            cnt_arr[i] = 0;
+        }
         current_bytes_avx = _mm256_set_epi64x(0,0,0,0);
     }
 
@@ -199,11 +295,9 @@ public:
     __attribute__((__target__("avx512vl,avx512f,avx512bw"))) ALWAYS_INLINE void updateSameLength(std::array<StringPtr, 4> data, UInt64 size)
     {
         UInt64 inc = 0;
-         print("start update same length", v0_avx);
+        // print("start update same length", v0_avx);
 
         /// We'll finish to process the remainder of the previous update, if any.
-
-        /// попробуем тут обрабатывать втупую для каждой строчки
         
         if (cnt & 7)
         {
@@ -244,50 +338,31 @@ public:
  
         cnt += size - inc;
 
-        print("after preprocessing", v0_avx);
+        //print("after preprocessing", v0_avx);
  
         UInt64 padding = 0;
         while (inc + 8 <= size)
         {
             current_bytes_avx = _mm256_set_epi64x(
-                unalignedLoadLittleEndian<UInt64>(data[0].data),
-                unalignedLoadLittleEndian<UInt64>(data[1].data),
-                unalignedLoadLittleEndian<UInt64>(data[2].data),
-                unalignedLoadLittleEndian<UInt64>(data[3].data)
+                unalignedLoadLittleEndian<UInt64>(data[0].data + padding),
+                unalignedLoadLittleEndian<UInt64>(data[1].data + padding),
+                unalignedLoadLittleEndian<UInt64>(data[2].data + padding),
+                unalignedLoadLittleEndian<UInt64>(data[3].data + padding)
             );
-            print("after iteration upload, current bytes", current_bytes_avx);
-
-        v0_avx = _mm256_add_epi64(v0_avx, v1_avx);
-            print("check v0_avx after iteration before XOR", v0_avx);
-
-        v1_avx = _mm256_rol_epi64(v1_avx, 13);                      
-        v1_avx = _mm256_xor_epi64(v1_avx, v0_avx);                  
-        v0_avx = _mm256_rol_epi64(v0_avx, 32);     
-            print("check v0_avx after iteration before XOR", v0_avx);
-
-        v2_avx = _mm256_add_epi64(v2_avx, v3_avx);                  
-        v3_avx = _mm256_rol_epi64(v3_avx, 16);                      
-        v3_avx = _mm256_xor_epi64(v3_avx, v2_avx);                  
-        v0_avx = _mm256_add_epi64(v0_avx, v3_avx);   
-            print("check v0_avx after iteration before XOR", v0_avx);
-
-        v3_avx = _mm256_rol_epi64(v3_avx, 21);                      
-        v3_avx = _mm256_xor_epi64(v3_avx, v0_avx);                  
-        v2_avx = _mm256_add_epi64(v2_avx, v1_avx);                  
-        v1_avx = _mm256_rol_epi64(v1_avx, 17);                      
-        v1_avx = _mm256_xor_epi64(v1_avx, v2_avx);                  
-        v2_avx = _mm256_rol_epi64(v2_avx, 32);                      
+            //print("after iteration upload, current bytes", current_bytes_avx);
 
 
 
-//            SIPROUND_AVX;
-            print("after iteration SIPROUND_AVX", current_bytes_avx);
-            print("check v0_avx after iteration before XOR", v0_avx);
+            v3_avx ^= current_bytes_avx;
+            SIPROUND_AVX;
+            SIPROUND_AVX;
+            //print("after iteration SIPROUND_AVX", current_bytes_avx);
+            //print("check v0_avx after iteration before XOR", v0_avx);
 
 
             v0_avx ^= current_bytes_avx;
  
-            print("check v0_avx after iteration", v0_avx);
+            //print("check v0_avx after iteration", v0_avx);
             inc += 8;
             padding += 8;
         }
@@ -295,7 +370,10 @@ public:
         for (auto& d : data) {
             d.data += padding;
         }
- 
+
+        current_bytes_avx = _mm256_set_epi64x(0,0,0,0);
+
+        // print("register here ", v0_avx);
         /// Pad the remainder, which is missing up to an 8-byte word.
         switch (size - inc)
         {
@@ -344,7 +422,136 @@ public:
             } [[fallthrough]];
             case 0: break;
         }
-        print("after update current bytes avx", current_bytes_avx);
+        //print("after update current bytes avx", current_bytes_avx);
+    }
+
+    __attribute__((__target__("avx512vl,avx512f,avx512bw"))) ALWAYS_INLINE bool updateAllLength(std::array<StringPtr, 4> data, std::array<UInt64, 4> szs)
+    {
+        UInt64 inc = 0;
+        const char* end[4] = {};
+        for (int i = 0; i < 4; ++i) {
+            end[i] = data[i].data + szs[i];
+        }
+
+        // assuming strings are in a sorted order
+       
+        // process while (min(sz{}) + 8 < )
+        size_t min_sz = szs[0];
+        if (min_sz < cnt) {
+            return false;
+        }
+        
+        if (cnt & 7) {
+            while (cnt & 7) {
+                for (size_t i = 0; i < data.size(); ++i) {
+                    if (i == 0) {
+                        current_bytes[CURRENT_BYTES_IDX(cnt & 7)] = *data[i].data;
+                    } else if (i == 1) {
+                        current_bytes_1[CURRENT_BYTES_IDX(cnt & 7)] = *data[i].data;
+                    } else if (i == 2) {
+                        current_bytes_2[CURRENT_BYTES_IDX(cnt & 7)] = *data[i].data;
+                    } else {
+                        current_bytes_3[CURRENT_BYTES_IDX(cnt & 7)] = *data[i].data;
+                    }
+                    ++data[i].data;
+                    cnt_arr[i]++;
+                }
+                ++cnt;
+                ++inc;
+            }
+            for (int i = 0; i < 4; ++i) {
+                v3_arr[i] ^= (i == 0 ? current_word : (i == 1 ? current_word_1 : (i == 2 ? current_word_2 : current_word_3)));
+                SIPROUND_ARR(i);
+                SIPROUND_ARR(i);
+                v0_arr[i] ^= (i == 0 ? current_word : (i == 1 ? current_word_1 : (i == 2 ? current_word_2 : current_word_3)));
+            }
+        }
+
+        v0_avx = _mm256_set_epi64x(v0_arr[0], v0_arr[1], v0_arr[2], v0_arr[3]);
+        v1_avx = _mm256_set_epi64x(v1_arr[0], v1_arr[1], v1_arr[2], v1_arr[3]);
+        v2_avx = _mm256_set_epi64x(v2_arr[0], v2_arr[1], v2_arr[2], v2_arr[3]);
+        v3_avx = _mm256_set_epi64x(v3_arr[0], v3_arr[1], v3_arr[2], v3_arr[3]);
+
+        cnt_arr[0] = cnt_arr[1] = cnt_arr[2] = cnt_arr[3] = cnt;
+        cnt_arr[0] += end[0] - data[0].data;
+        cnt_arr[1] += end[1] - data[1].data;
+        cnt_arr[2] += end[2] - data[2].data;
+        cnt_arr[3] += end[3] - data[3].data;
+        
+        UInt64 padding = 0;
+        while (inc + 8 <= min_sz)
+        {
+            current_bytes_avx = _mm256_set_epi64x(
+                unalignedLoadLittleEndian<UInt64>(data[0].data + padding),
+                unalignedLoadLittleEndian<UInt64>(data[1].data + padding),
+                unalignedLoadLittleEndian<UInt64>(data[2].data + padding),
+                unalignedLoadLittleEndian<UInt64>(data[3].data + padding)
+            );
+            //print("after iteration upload, current bytes", current_bytes_avx);
+
+            v3_avx ^= current_bytes_avx;
+            SIPROUND_AVX;
+            SIPROUND_AVX;
+            //print("after iteration SIPROUND_AVX", current_bytes_avx);
+            //print("check v0_avx after iteration before XOR", v0_avx);
+            v0_avx ^= current_bytes_avx;
+
+            //print("check v0_avx after iteration", v0_avx);
+            inc += 8;
+            padding += 8;
+        }
+
+        
+        for (auto& d : data) {
+            d.data += padding;
+        }
+
+        current_bytes_avx = _mm256_set_epi64x(0,0,0,0);
+
+        extractCF();
+        //std::cout << "all lengths register: " << v0_arr[0] << ' ' << v0_arr[1] << ' ' << v0_arr[2] << ' ' << v0_arr[3] << std::endl; 
+
+        for (int i = 0; i < 4; ++i) {
+            while (data[i].data + 8 <= end[i]) {
+                current_word = unalignedLoadLittleEndian<UInt64>(data[i].data);
+
+                v3_arr[i] ^= current_word;
+                SIPROUND_ARR(i);
+                SIPROUND_ARR(i);
+                v0_arr[i] ^= current_word;
+
+                data[i].data += 8;
+            }
+        }
+
+        //std::cout << "all lengths register: " << v0_arr[0] << ' ' << v0_arr[1] << ' ' << v0_arr[2] << ' ' << v0_arr[3] << std::endl; 
+
+        current_word = current_word_1 = current_word_2 = current_word_3 = 0;
+        for (int i = 0; i < 4; ++i) {
+            UInt8* tmp;
+            if (i == 0) {
+                tmp = current_bytes;
+            } else if (i == 1) {
+                tmp = current_bytes_1;
+            } else if (i == 2) {
+                tmp = current_bytes_2;
+            } else {
+                tmp = current_bytes_3;
+            }
+            switch (end[i] - data[i].data)
+            {
+                case 7: tmp[CURRENT_BYTES_IDX(6)] = data[i].data[6]; [[fallthrough]];
+                case 6: tmp[CURRENT_BYTES_IDX(5)] = data[i].data[5]; [[fallthrough]];
+                case 5: tmp[CURRENT_BYTES_IDX(4)] = data[i].data[4]; [[fallthrough]];
+                case 4: tmp[CURRENT_BYTES_IDX(3)] = data[i].data[3]; [[fallthrough]];
+                case 3: tmp[CURRENT_BYTES_IDX(2)] = data[i].data[2]; [[fallthrough]];
+                case 2: tmp[CURRENT_BYTES_IDX(1)] = data[i].data[1]; [[fallthrough]];
+                case 1: tmp[CURRENT_BYTES_IDX(0)] = data[i].data[0]; [[fallthrough]];
+                case 0: break;
+            }
+        }
+
+        return true;
     }
 
     ALWAYS_INLINE void update(const char * data, UInt64 size)
@@ -370,6 +577,7 @@ public:
             SIPROUND;
             v0 ^= current_word;
         }
+       // std::cout << " after start update: " << v0 << std::endl;
 
         cnt += end - data;
 
@@ -377,10 +585,15 @@ public:
         {
             current_word = unalignedLoadLittleEndian<UInt64>(data);
 
+       //     std::cout << " current_word: " << current_word << std::endl;
+
             v3 ^= current_word;
             SIPROUND;
             SIPROUND;
+      //      std::cout << " v0 after iteration before xor: " << v0 << std::endl;
             v0 ^= current_word;
+
+       //     std::cout << " v0 after iteration after xor: " << v0 << std::endl;
 
             data += 8;
         }
@@ -420,7 +633,22 @@ public:
     ALWAYS_INLINE void update(const std::string & x) { update(x.data(), x.length()); }
     ALWAYS_INLINE void update(const std::string_view x) { update(x.data(), x.size()); }
     ALWAYS_INLINE void update(const char * s) { update(std::string_view(s)); }
- 
+
+    __attribute__((__target__("avx512vl,avx512f,avx512bw"))) ALWAYS_INLINE void extractCF()
+    {
+        auto fill_vx_array = [](__m256i& avx_reg, UInt64* v) {
+            v[0] = static_cast<UInt64>(_mm256_extract_epi64(avx_reg, 0));
+            v[1] = static_cast<UInt64>(_mm256_extract_epi64(avx_reg, 1));
+            v[2] = static_cast<UInt64>(_mm256_extract_epi64(avx_reg, 2));
+            v[3] = static_cast<UInt64>(_mm256_extract_epi64(avx_reg, 3));
+        };
+
+        fill_vx_array(v0_avx, v0_arr);
+        fill_vx_array(v1_avx, v1_arr);
+        fill_vx_array(v2_avx, v2_arr);
+        fill_vx_array(v3_avx, v3_arr);
+    }
+
     ALWAYS_INLINE UInt64 get64()
     {
         finalize();
@@ -429,22 +657,25 @@ public:
 
     __attribute__((__target__("avx512vl,avx512f,avx512bw"))) ALWAYS_INLINE std::array<UInt64, 4> get64Array()
     {
-        print("before finalize v0_avx", v0_avx);
-        print("before finalize v1_avx", v1_avx);
-        print("before finalize v2_avx", v2_avx);
-        print("before finalize v3_avx", v3_avx);
-
         finalize_array();
-        print("after finalize v0_avx", v0_avx);
-        print("after finalize v1_avx", v1_avx);
-        print("after finalize v2_avx", v2_avx);
-        print("after finalize v3_avx", v3_avx);
 
         __m256i res = v0_avx ^ v1_avx ^ v2_avx ^ v3_avx;
 
-        print("before drop result", res);
+        //print("before drop result", res);
         return {static_cast<UInt64>(_mm256_extract_epi64(res, 0)), static_cast<UInt64>(_mm256_extract_epi64(res, 1)),static_cast<UInt64>(_mm256_extract_epi64(res, 2)), static_cast<UInt64>(_mm256_extract_epi64(res, 3))};
     }
+
+    __attribute__((__target__("avx512vl,avx512f,avx512bw"))) ALWAYS_INLINE std::array<UInt64, 4> get64ArrayAllLength()
+    {
+        finalize_array_all_len();
+        std::array<UInt64, 4> result = {};
+        for (int i = 0; i < 4; ++i) {
+            result[i] = v0_arr[i] ^ v1_arr[i] ^ v2_arr[i] ^ v3_arr[i];
+        }
+        //print("before drop result", res);
+        return result;
+    }
+
  
     template <typename T>
     requires (sizeof(T) == 8)
@@ -489,97 +720,113 @@ public:
  
 #include <cstddef>
  
-inline std::array<char, 16> getSipHash128AsArray(SipHash & sip_hash)
+inline std::array<char, 16> getSipHashAvx128AsArray(SipHashAvx & sip_hash)
 {
     std::array<char, 16> arr;
     *reinterpret_cast<UInt128*>(arr.data()) = sip_hash.get128();
     return arr;
 }
  
-inline CityHash_v1_0_2::uint128 getSipHash128AsPair(SipHash & sip_hash)
+inline CityHash_v1_0_2::uint128 getSipHashAvx128AsPair(SipHashAvx & sip_hash)
 {
     CityHash_v1_0_2::uint128 result;
     sip_hash.get128(result.low64, result.high64);
     return result;
 }
  
-inline UInt128 sipHash128Keyed(UInt64 key0, UInt64 key1, const char * data, const size_t size)
+inline UInt128 SipHashAvx128Keyed(UInt64 key0, UInt64 key1, const char * data, const size_t size)
 {
-    SipHash hash(key0, key1);
+    SipHashAvx hash(key0, key1);
     hash.update(data, size);
     return hash.get128();
 }
  
-inline UInt128 sipHash128(const char * data, const size_t size)
+inline UInt128 SipHashAvx128(const char * data, const size_t size)
 {
-    return sipHash128Keyed(0, 0, data, size);
+    return SipHashAvx128Keyed(0, 0, data, size);
 }
  
-inline String sipHash128String(const char * data, const size_t size)
+inline String SipHashAvx128String(const char * data, const size_t size)
 {
-    return getHexUIntLowercase(sipHash128(data, size));
+    return getHexUIntLowercase(SipHashAvx128(data, size));
 }
  
-inline String sipHash128String(const String & str)
+inline String SipHashAvx128String(const String & str)
 {
-    return sipHash128String(str.data(), str.size());
+    return SipHashAvx128String(str.data(), str.size());
 }
  
-inline UInt128 sipHash128ReferenceKeyed(UInt64 key0, UInt64 key1, const char * data, const size_t size)
+inline UInt128 SipHashAvx128ReferenceKeyed(UInt64 key0, UInt64 key1, const char * data, const size_t size)
 {
-    SipHash hash(key0, key1, true);
+    SipHashAvx hash(key0, key1, true);
     hash.update(data, size);
     return hash.get128Reference();
 }
  
-inline UInt128 sipHash128Reference(const char * data, const size_t size)
+inline UInt128 SipHashAvx128Reference(const char * data, const size_t size)
 {
-    return sipHash128ReferenceKeyed(0, 0, data, size);
+    return SipHashAvx128ReferenceKeyed(0, 0, data, size);
 }
  
-inline UInt64 sipHash64Keyed(UInt64 key0, UInt64 key1, const char * data, const size_t size)
+inline UInt64 SipHashAvx64Keyed(UInt64 key0, UInt64 key1, const char * data, const size_t size)
 {
-    SipHash hash(key0, key1);
+    SipHashAvx hash(key0, key1);
     hash.update(data, size);
     return hash.get64();
 }
 
-__attribute__((__target__("avx512vl,avx512f,avx512bw"))) inline std::array<UInt64, 4> sipHash64ArrayStr(std::array<const char*, 4> data, const size_t size)
+__attribute__((__target__("avx512vl,avx512f,avx512bw"))) inline std::array<UInt64, 4> SipHashAvx64ArrayStr(std::array<const char*, 4> data, const size_t size)
 {
-    SipHash hash(0, 0);
-    std::array<SipHash::StringPtr, 4> data1;
+    //std::cout << " constructor " << std::endl;
+    SipHashAvx hash(0, 0);
+    //std::cout << " start func " << std::endl;
+    std::array<SipHashAvx::StringPtr, 4> data1;
     for (size_t i = 0; i < 4; ++i) {
         data1[i].data = data[i];
     }
     hash.updateSameLength(data1, size);
     return hash.get64Array();
 }
- 
-inline UInt64 sipHash64(const char * data, const size_t size)
+
+__attribute__((__target__("avx512vl,avx512f,avx512bw"))) inline std::array<UInt64, 4> SipHashAvx64ArrayStrAllLength(std::array<const char*, 4> data, std::array<size_t, 4> szs)
 {
-    return sipHash64Keyed(0, 0, data, size);
+    //std::cout << " constructor " << std::endl;
+    SipHashAvx hash(0, 0);
+    //std::cout << " start func " << std::endl;
+    std::array<SipHashAvx::StringPtr, 4> data1;
+    for (size_t i = 0; i < 4; ++i) {
+        data1[i].data = data[i];
+    }
+    hash.updateAllLength(data1, szs);
+    return hash.get64ArrayAllLength();
+}
+
+ 
+inline UInt64 SipHashAvx64(const char * data, const size_t size)
+{
+    return SipHashAvx64Keyed(0, 0, data, size);
 }
  
 template <typename T>
-inline UInt64 sipHash64(const T & x)
+inline UInt64 SipHashAvx64(const T & x)
 {
-    SipHash hash;
+    SipHashAvx hash;
     hash.update(x);
     return hash.get64();
 }
 
 template <typename T>
-inline UInt64 sipHash64Array(const std::array<T, 4> & x)
+inline UInt64 SipHashAvx64Array(const std::array<T, 4> & x)
 {
-    SipHash hash;
+    SipHashAvx hash;
     hash.updateSameLength(x);
     return hash.get64();
 }
 
  
-inline UInt64 sipHash64(const std::string & s)
+inline UInt64 SipHashAvx64(const std::string & s)
 {
-    return sipHash64(s.data(), s.size());
+    return SipHashAvx64(s.data(), s.size());
 }
  
 #undef CURRENT_BYTES_IDX
