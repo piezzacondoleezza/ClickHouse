@@ -1,4 +1,5 @@
 #include <array>
+#include <cstddef>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -12,20 +13,13 @@
 #include "SipHashAvx.h"
 #include "base/types.h"
 
-#include <random>
 
 
 std::string get_string(size_t cnt) {
     std::string res;
+    std::mt19937 rnd(time(nullptr));
     for (size_t i = 0; i < cnt; ++i) {
-        if (i % 3 == 1) {
-            res += 'a';
-        } else if (i % 3 == 0) {
-            res += 'b';
-        } else {
-            res += 'c';
-        }
-        //res += static_cast<char>( % 26 + 'a');
+        res += static_cast<char>(rnd() % 26 + static_cast<int>('a'));
     }
     return res;
 }
@@ -69,11 +63,60 @@ void check_speed_default(size_t cnt) {
 
 void check_speed(size_t cnt) {
     std::cout << "Speed check with cnt = " << cnt << '\n';
+    check_speed_default(cnt);
     check_speed_avx_same(cnt);
     check_speed_avx_diff(cnt);
-    check_speed_default(cnt);
     std::cout << "==== Speed test end ====\n";
 }
+
+
+std::vector<std::string> gen_same_sz_vec(size_t vec_sz) {
+    std::vector<std::string> v(vec_sz);
+    std::mt19937 rnd(time(nullptr));
+    size_t str_sz = 1000 + rnd() % 10000;
+    for (size_t i = 0; i < vec_sz; ++i) {
+        v.push_back(get_string(str_sz));
+    }
+    return v;
+}
+
+void check_speed_avx_same(std::vector<std::string>& v) {
+    auto start = clock();
+    for (size_t i = 0; i < v.size(); i += 4) {
+        auto result = SipHashAvx64ArrayStr({v[0].data(), v[1].data(), v[2].data(), v[3].data()}, v[0].size());
+        (void)result;
+    }
+    std::cout << clock() - start << '\n';
+}
+
+void check_speed_avx_diff(std::vector<std::string>& v) {
+    auto start = clock();
+    for (size_t i = 0; i < v.size(); i += 4) {
+        auto result = SipHashAvx64ArrayStrAllLength({v[0].data(), v[1].data(), v[2].data(), v[3].data()}, {v[0].size(), v[1].size(), v[2].size(), v[3].size()});
+        (void)result;
+    }
+    std::cout << clock() - start << '\n';
+}
+
+void check_speed_default(std::vector<std::string>& v) {
+    auto start = clock();
+    for (int i = 0; i < 4; ++i) {
+        auto result = SipHashAvx64(v[i].data(), v[i].size());
+        (void)result;
+    }
+    std::cout << clock() - start << '\n';
+}
+
+
+void check_speed_vec(size_t cnt) {
+    auto v = gen_same_sz_vec(cnt);
+    std::cout << "Speed check with vector of size cnt = " << cnt << '\n';
+    check_speed_default(v);
+    check_speed_avx_same(v);
+    check_speed_avx_diff(v);
+    std::cout << "==== Speed test end ====\n";
+}
+
 
 int mainEntryClickHouseSipHashAVX(int argc, char ** argv) {
     (void)argc;
@@ -93,5 +136,10 @@ int mainEntryClickHouseSipHashAVX(int argc, char ** argv) {
     check_speed(100007);
     check_speed(10000007);
 
+
+    check_speed_vec(12);
+    check_speed_vec(100);
+    check_speed_vec(200);
+    check_speed_vec(1000);
     return 0;
 }

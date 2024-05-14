@@ -338,7 +338,7 @@ public:
         cnt += size - inc;
 
         //print("after preprocessing", v0_avx);
-        auto start = clock();
+        //auto start = clock();
         //UInt64 padding = 0;
         while (data[0].data + 8 <= end)
         {
@@ -366,7 +366,7 @@ public:
             //padding += 8;
         }
 
-        std::cout << "dfadafds 1337 " << clock() - start << '\n';
+       // std::cout << "dfadafds 1337 " << clock() - start << '\n';
 
         //for (auto& d : data) {
         //    d.data += padding;
@@ -581,7 +581,7 @@ public:
        // std::cout << " after start update: " << v0 << std::endl;
 
         cnt += end - data;
-        auto start = clock();
+        //auto start = clock();
         while (data + 8 <= end)
         {
             current_word = unalignedLoadLittleEndian<UInt64>(data);
@@ -598,7 +598,7 @@ public:
 
             data += 8;
         }
-        std::cout << "dfadafds 228 " << clock() - start << '\n';
+       //std::cout << "dfadafds 228 " << clock() - start << '\n';
 
         /// Pad the remainder, which is missing up to an 8-byte word.
         current_word = 0;
