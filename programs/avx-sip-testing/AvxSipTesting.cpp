@@ -31,54 +31,67 @@ std::string get_string(size_t cnt) {
 }
 
 
+void check_speed_avx_same(size_t cnt) {
+    std::string sample = get_string(cnt);
+    std::array<const char*, 4> arr = {sample.data(), sample.data(), sample.data(), sample.data()};
+    auto start = clock();
+    auto result = SipHashAvx64ArrayStr(arr, cnt);
+    (void)result;
+    std::cout << clock() - start << '\n';
+}
+
+void check_speed_avx_diff(size_t cnt) {
+    std::string one = get_string(cnt);
+    std::string two = get_string(cnt + 1);
+    std::string three = get_string(cnt + 3);
+    std::string four = get_string(cnt + 4);
+
+    std::array<const char*, 4> arr_1 = {one.data(), two.data(), three.data(), four.data()};
+    std::array<size_t, 4> szs = {one.size(), two.size(), three.size(), four.size()};
+    auto start = clock();
+    auto result = SipHashAvx64ArrayStrAllLength(arr_1, szs);
+    (void)result;
+    std::cout << clock() - start << '\n';
+}
+
+void check_speed_default(size_t cnt) {
+    std::string sample = get_string(cnt);
+    std::array<const char*, 4> arr = {sample.data(), sample.data(), sample.data(), sample.data()};
+    UInt64 result;
+    auto start = clock();
+    for (int i = 0; i < 4; ++i) {
+        result = SipHashAvx64(arr);
+    }
+    (void)result;
+    std::cout << clock() - start << '\n';
+}
+
+
+void check_speed(size_t cnt) {
+    std::cout << "Speed check with cnt = " << cnt << '\n';
+    check_speed_avx_same(cnt);
+    check_speed_avx_diff(cnt);
+    check_speed_default(cnt);
+    std::cout << "==== Speed test end ====\n";
+}
+
 int mainEntryClickHouseSipHashAVX(int argc, char ** argv) {
     (void)argc;
     (void)argv;
 
 
-    size_t sz = 49;
-    std::string check1 = get_string(sz);
-
-    std::cout << check1 << std::endl;
-    
-    std::array<const char*, 4> arr = {check1.data(), check1.data(), check1.data(), check1.data()};
-
-
-    auto start = clock();
-    auto result = SipHashAvx64ArrayStr(arr, sz);
-    std::cout << clock() - start << std::endl;
-
-    for (int i = 0; i < 4; ++i) {
-        std::cout << result[i] << std::endl;
-    }
-
-    start = clock();
-    UInt64 result2 = 0;
-    for (int i = 0; i < 4; ++i) {
-        result2 = SipHashAvx64(check1.data(), check1.size());
-    }
-    std::cout << clock() - start << std::endl;
-
-    std::cout << result2 << std::endl;
-
-
-    std::string one = get_string(sz - 9);
-    std::string two = get_string(sz - 1);
-    std::string three = get_string(sz);
-    std::string four = get_string(sz + 11);
-
-    start = clock();
-    std::array<const char*, 4> arr_1 = {one.data(), two.data(), three.data(), four.data()};
-    std::array<size_t, 4> szs = {one.size(), two.size(), three.size(), four.size()};
-    //for (int i = 0; i < 4; ++i) std::cout << szs[i] << ' ';
-    //std::cout << std::endl;
-
-    auto result3 = SipHashAvx64ArrayStrAllLength(arr_1, szs);
-    std::cout << clock() - start << std::endl;
-    for (int i = 0; i < 4; ++i) {
-        std::cout << result3[i] << std::endl;
-    }
-
+    check_speed(20);
+    check_speed(47);
+    check_speed(159);
+    check_speed(227);
+    check_speed(777);
+    check_speed(1528);
+    check_speed(3152);
+    check_speed(7777);
+    check_speed(15999);
+    check_speed(50001);
+    check_speed(100007);
+    check_speed(10000007);
 
     return 0;
 }

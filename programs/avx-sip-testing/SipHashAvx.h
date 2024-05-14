@@ -51,19 +51,19 @@ namespace DB::ErrorCodes
 #define SIPROUND_AVX                                               \
     do                                                              \
     {                                                               \
-        v0_avx = _mm256_add_epi64(v0_avx, v1_avx);                  \
+        v0_avx += v1_avx;                  \
         v1_avx = _mm256_rol_epi64(v1_avx, 13);                      \
-        v1_avx = _mm256_xor_epi64(v1_avx, v0_avx);                  \
+        v1_avx ^= v0_avx;                  \
         v0_avx = _mm256_rol_epi64(v0_avx, 32);                      \
-        v2_avx = _mm256_add_epi64(v2_avx, v3_avx);                  \
+        v2_avx += v3_avx;                  \
         v3_avx = _mm256_rol_epi64(v3_avx, 16);                      \
-        v3_avx = _mm256_xor_epi64(v3_avx, v2_avx);                  \
-        v0_avx = _mm256_add_epi64(v0_avx, v3_avx);                  \
+        v3_avx ^= v2_avx;                  \
+        v0_avx += v3_avx;                  \
         v3_avx = _mm256_rol_epi64(v3_avx, 21);                      \
-        v3_avx = _mm256_xor_epi64(v3_avx, v0_avx);                  \
-        v2_avx = _mm256_add_epi64(v2_avx, v1_avx);                  \
+        v3_avx ^= v0_avx;                  \
+        v2_avx += v1_avx;                  \
         v1_avx = _mm256_rol_epi64(v1_avx, 17);                      \
-        v1_avx = _mm256_xor_epi64(v1_avx, v2_avx);                  \
+        v1_avx ^= v2_avx;                  \
         v2_avx = _mm256_rol_epi64(v2_avx, 32);                      \
     } while(0)
 
@@ -299,6 +299,8 @@ public:
 
         /// We'll finish to process the remainder of the previous update, if any.
         
+        const char* end = data[0].data + size;
+
         if (cnt & 7)
         {
             while (cnt & 7 && inc < size)
@@ -320,13 +322,10 @@ public:
                 );
                 current_bytes_avx &= current_avx;
                 current_bytes_avx |= avx_to_set;
-                //current_bytes_avx = _mm256_and_epi64(current_bytes_avx, current_avx);
-                //current_bytes_avx = _mm256_or_epi64(current_bytes_avx, avx_to_set);
                 ++cnt;
                 ++inc;
             }
  
-            /// If we still do not have enough bytes to an 8-byte word.
             if (cnt & 7)
                 return;
  
@@ -339,15 +338,15 @@ public:
         cnt += size - inc;
 
         //print("after preprocessing", v0_avx);
- 
-        UInt64 padding = 0;
-        while (inc + 8 <= size)
+        auto start = clock();
+        //UInt64 padding = 0;
+        while (data[0].data + 8 <= end)
         {
             current_bytes_avx = _mm256_set_epi64x(
-                unalignedLoadLittleEndian<UInt64>(data[0].data + padding),
-                unalignedLoadLittleEndian<UInt64>(data[1].data + padding),
-                unalignedLoadLittleEndian<UInt64>(data[2].data + padding),
-                unalignedLoadLittleEndian<UInt64>(data[3].data + padding)
+                unalignedLoadLittleEndian<UInt64>(data[0].data += 8),
+                unalignedLoadLittleEndian<UInt64>(data[1].data += 8),
+                unalignedLoadLittleEndian<UInt64>(data[2].data += 8),
+                unalignedLoadLittleEndian<UInt64>(data[3].data += 8)
             );
             //print("after iteration upload, current bytes", current_bytes_avx);
 
@@ -364,12 +363,14 @@ public:
  
             //print("check v0_avx after iteration", v0_avx);
             inc += 8;
-            padding += 8;
+            //padding += 8;
         }
 
-        for (auto& d : data) {
-            d.data += padding;
-        }
+        std::cout << "dfadafds 1337 " << clock() - start << '\n';
+
+        //for (auto& d : data) {
+        //    d.data += padding;
+        //}
 
         current_bytes_avx = _mm256_set_epi64x(0,0,0,0);
 
@@ -580,7 +581,7 @@ public:
        // std::cout << " after start update: " << v0 << std::endl;
 
         cnt += end - data;
-
+        auto start = clock();
         while (data + 8 <= end)
         {
             current_word = unalignedLoadLittleEndian<UInt64>(data);
@@ -597,6 +598,7 @@ public:
 
             data += 8;
         }
+        std::cout << "dfadafds 228 " << clock() - start << '\n';
 
         /// Pad the remainder, which is missing up to an 8-byte word.
         current_word = 0;
@@ -778,7 +780,7 @@ inline UInt64 SipHashAvx64Keyed(UInt64 key0, UInt64 key1, const char * data, con
 __attribute__((__target__("avx512vl,avx512f,avx512bw"))) inline std::array<UInt64, 4> SipHashAvx64ArrayStr(std::array<const char*, 4> data, const size_t size)
 {
     //std::cout << " constructor " << std::endl;
-    SipHashAvx hash(0, 0);
+    SipHashAvx hash;
     //std::cout << " start func " << std::endl;
     std::array<SipHashAvx::StringPtr, 4> data1;
     for (size_t i = 0; i < 4; ++i) {
@@ -791,7 +793,7 @@ __attribute__((__target__("avx512vl,avx512f,avx512bw"))) inline std::array<UInt6
 __attribute__((__target__("avx512vl,avx512f,avx512bw"))) inline std::array<UInt64, 4> SipHashAvx64ArrayStrAllLength(std::array<const char*, 4> data, std::array<size_t, 4> szs)
 {
     //std::cout << " constructor " << std::endl;
-    SipHashAvx hash(0, 0);
+    SipHashAvx hash;
     //std::cout << " start func " << std::endl;
     std::array<SipHashAvx::StringPtr, 4> data1;
     for (size_t i = 0; i < 4; ++i) {
