@@ -18,6 +18,7 @@
 #include <array>
 #include <bit>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <Core/Defines.h>
 #include <base/extended_types.h>
@@ -247,11 +248,7 @@ private:
     }
 
 
-public:
-    struct StringPtr {
-        const char* data;
-    };
- 
+public: 
     /// Arguments - seed.
     __attribute__((__target__("avx512vl,avx512f,avx512bw"))) SipHashAvx(UInt64 key0 = 0, UInt64 key1 = 0, bool is_reference_128_ = false) /// NOLINT
     {
@@ -292,14 +289,14 @@ public:
     //};
 
  
-    __attribute__((__target__("avx512vl,avx512f,avx512bw"))) ALWAYS_INLINE void updateSameLength(std::array<StringPtr, 4> data, UInt64 size)
+    __attribute__((__target__("avx512vl,avx512f,avx512bw"))) ALWAYS_INLINE void updateSameLength(std::array<const char*, 4> data, UInt64 size)
     {
         UInt64 inc = 0;
         // print("start update same length", v0_avx);
 
         /// We'll finish to process the remainder of the previous update, if any.
         
-        const char* end = data[0].data + size;
+        const char* end = data[0] + size;
 
         if (cnt & 7)
         {
@@ -315,10 +312,10 @@ public:
                     fix_val
                 );
                 __m256i avx_to_set = _mm256_set_epi64x(
-                    (*data[0].data++) << (8 * byte),
-                    (*data[1].data++) << (8 * byte),
-                    (*data[2].data++) << (8 * byte),
-                    (*data[3].data++) << (8 * byte)
+                    (*data[0]++) << (8 * byte),
+                    (*data[1]++) << (8 * byte),
+                    (*data[2]++) << (8 * byte),
+                    (*data[3]++) << (8 * byte)
                 );
                 current_bytes_avx &= current_avx;
                 current_bytes_avx |= avx_to_set;
@@ -340,14 +337,18 @@ public:
         //print("after preprocessing", v0_avx);
         //auto start = clock();
         //UInt64 padding = 0;
-        while (data[0].data + 8 <= end)
+        while (data[0] + 8 <= end)
         {
             current_bytes_avx = _mm256_set_epi64x(
-                unalignedLoadLittleEndian<UInt64>(data[0].data += 8),
-                unalignedLoadLittleEndian<UInt64>(data[1].data += 8),
-                unalignedLoadLittleEndian<UInt64>(data[2].data += 8),
-                unalignedLoadLittleEndian<UInt64>(data[3].data += 8)
+                unalignedLoadLittleEndian<UInt64>(data[0]),
+                unalignedLoadLittleEndian<UInt64>(data[1]),
+                unalignedLoadLittleEndian<UInt64>(data[2]),
+                unalignedLoadLittleEndian<UInt64>(data[3])
             );
+            data[0] += 8;
+            data[1] += 8;
+            data[2] += 8;
+            data[3] += 8;
             //print("after iteration upload, current bytes", current_bytes_avx);
 
 
@@ -358,9 +359,7 @@ public:
             //print("after iteration SIPROUND_AVX", current_bytes_avx);
             //print("check v0_avx after iteration before XOR", v0_avx);
 
-
             v0_avx ^= current_bytes_avx;
- 
             //print("check v0_avx after iteration", v0_avx);
             inc += 8;
             //padding += 8;
@@ -382,56 +381,56 @@ public:
                 UInt64 x = 8 * CURRENT_BYTES_IDX(6);
                 UInt64 vl = MAX64 ^ (255ull << x);
                 current_bytes_avx &= _mm256_set_epi64x(vl, vl, vl, vl);
-                current_bytes_avx |= _mm256_set_epi64x(data[0].data[6] << x, data[1].data[6] << x, data[2].data[6] << x, data[3].data[6] << x);
+                current_bytes_avx |= _mm256_set_epi64x(data[0][6] << x, data[1][6] << x, data[2][6] << x, data[3][6] << x);
             } [[fallthrough]];
             case 6: {
                 UInt64 x = 8 * CURRENT_BYTES_IDX(5);
                 UInt64 vl = MAX64 ^ (255ull << x);
                 current_bytes_avx &= _mm256_set_epi64x(vl, vl, vl, vl);
-                current_bytes_avx |= _mm256_set_epi64x(data[0].data[5] << x, data[1].data[5] << x, data[2].data[5] << x, data[3].data[5] << x);
+                current_bytes_avx |= _mm256_set_epi64x(data[0][5] << x, data[1][5] << x, data[2][5] << x, data[3][5] << x);
 
             } [[fallthrough]];
             case 5: {
                 UInt64 x = 8 * CURRENT_BYTES_IDX(4);
                 UInt64 vl = MAX64 ^ (255ull << x);
                 current_bytes_avx &= _mm256_set_epi64x(vl, vl, vl, vl);
-                current_bytes_avx |= _mm256_set_epi64x(data[0].data[4]<< x, data[1].data[4]<< x, data[2].data[4]<< x, data[3].data[4]<< x);
+                current_bytes_avx |= _mm256_set_epi64x(data[0][4]<< x, data[1][4]<< x, data[2][4]<< x, data[3][4]<< x);
             } [[fallthrough]];
             case 4: { 
                 UInt64 x = 8 * CURRENT_BYTES_IDX(3);
                 UInt64 vl = MAX64 ^ (255ull << x);
                 current_bytes_avx &= _mm256_set_epi64x(vl, vl, vl, vl);
-                current_bytes_avx |= _mm256_set_epi64x(data[0].data[3]<< x, data[1].data[3]<< x, data[2].data[3]<< x, data[3].data[3]<< x);
+                current_bytes_avx |= _mm256_set_epi64x(data[0][3]<< x, data[1][3]<< x, data[2][3]<< x, data[3][3]<< x);
             }[[fallthrough]];
             case 3: {
                 UInt64 x = 8 * CURRENT_BYTES_IDX(2);
                 UInt64 vl = MAX64 ^ (255ull << x);
                 current_bytes_avx &= _mm256_set_epi64x(vl, vl, vl, vl);
-                current_bytes_avx |= _mm256_set_epi64x(data[0].data[2]<< x, data[1].data[2]<< x, data[2].data[2]<< x, data[3].data[2]<< x);
+                current_bytes_avx |= _mm256_set_epi64x(data[0][2]<< x, data[1][2]<< x, data[2][2]<< x, data[3][2]<< x);
             }[[fallthrough]];
             case 2: {
                 UInt64 x = 8 * CURRENT_BYTES_IDX(1);
                 UInt64 vl = MAX64 ^ (255ull << x);
                 current_bytes_avx &= _mm256_set_epi64x(vl, vl, vl, vl);
-                current_bytes_avx |= _mm256_set_epi64x(data[0].data[1]<< x, data[1].data[1]<< x, data[2].data[1]<< x, data[3].data[1]<< x);
+                current_bytes_avx |= _mm256_set_epi64x(data[0][1]<< x, data[1][1]<< x, data[2][1]<< x, data[3][1]<< x);
             }[[fallthrough]];
             case 1: {
                 UInt64 x = 8 * CURRENT_BYTES_IDX(0);
                 UInt64 vl = MAX64 ^ (255ull << x);
                 current_bytes_avx &= _mm256_set_epi64x(vl, vl, vl, vl);
-                current_bytes_avx |= _mm256_set_epi64x(data[0].data[0]<< x, data[1].data[0]<< x, data[2].data[0]<< x, data[3].data[0]<< x);
+                current_bytes_avx |= _mm256_set_epi64x(data[0][0]<< x, data[1][0]<< x, data[2][0]<< x, data[3][0]<< x);
             } [[fallthrough]];
             case 0: break;
         }
         //print("after update current bytes avx", current_bytes_avx);
     }
 
-    __attribute__((__target__("avx512vl,avx512f,avx512bw"))) ALWAYS_INLINE bool updateAllLength(std::array<StringPtr, 4> data, std::array<UInt64, 4> szs)
+    __attribute__((__target__("avx512vl,avx512f,avx512bw"))) ALWAYS_INLINE bool updateAllLength(std::array<const char*, 4> data, std::array<UInt64, 4> szs)
     {
         UInt64 inc = 0;
         const char* end[4] = {};
         for (int i = 0; i < 4; ++i) {
-            end[i] = data[i].data + szs[i];
+            end[i] = data[i] + szs[i];
         }
 
         // assuming strings are in a sorted order
@@ -446,15 +445,15 @@ public:
             while (cnt & 7) {
                 for (size_t i = 0; i < data.size(); ++i) {
                     if (i == 0) {
-                        current_bytes[CURRENT_BYTES_IDX(cnt & 7)] = *data[i].data;
+                        current_bytes[CURRENT_BYTES_IDX(cnt & 7)] = *data[i];
                     } else if (i == 1) {
-                        current_bytes_1[CURRENT_BYTES_IDX(cnt & 7)] = *data[i].data;
+                        current_bytes_1[CURRENT_BYTES_IDX(cnt & 7)] = *data[i];
                     } else if (i == 2) {
-                        current_bytes_2[CURRENT_BYTES_IDX(cnt & 7)] = *data[i].data;
+                        current_bytes_2[CURRENT_BYTES_IDX(cnt & 7)] = *data[i];
                     } else {
-                        current_bytes_3[CURRENT_BYTES_IDX(cnt & 7)] = *data[i].data;
+                        current_bytes_3[CURRENT_BYTES_IDX(cnt & 7)] = *data[i];
                     }
-                    ++data[i].data;
+                    ++data[i];
                     cnt_arr[i]++;
                 }
                 ++cnt;
@@ -474,19 +473,19 @@ public:
         v3_avx = _mm256_set_epi64x(v3_arr[0], v3_arr[1], v3_arr[2], v3_arr[3]);
 
         cnt_arr[0] = cnt_arr[1] = cnt_arr[2] = cnt_arr[3] = cnt;
-        cnt_arr[0] += end[0] - data[0].data;
-        cnt_arr[1] += end[1] - data[1].data;
-        cnt_arr[2] += end[2] - data[2].data;
-        cnt_arr[3] += end[3] - data[3].data;
+        cnt_arr[0] += end[0] - data[0];
+        cnt_arr[1] += end[1] - data[1];
+        cnt_arr[2] += end[2] - data[2];
+        cnt_arr[3] += end[3] - data[3];
         
         UInt64 padding = 0;
         while (inc + 8 <= min_sz)
         {
             current_bytes_avx = _mm256_set_epi64x(
-                unalignedLoadLittleEndian<UInt64>(data[0].data + padding),
-                unalignedLoadLittleEndian<UInt64>(data[1].data + padding),
-                unalignedLoadLittleEndian<UInt64>(data[2].data + padding),
-                unalignedLoadLittleEndian<UInt64>(data[3].data + padding)
+                unalignedLoadLittleEndian<UInt64>(data[0] + padding),
+                unalignedLoadLittleEndian<UInt64>(data[1] + padding),
+                unalignedLoadLittleEndian<UInt64>(data[2] + padding),
+                unalignedLoadLittleEndian<UInt64>(data[3] + padding)
             );
             //print("after iteration upload, current bytes", current_bytes_avx);
 
@@ -504,7 +503,7 @@ public:
 
         
         for (auto& d : data) {
-            d.data += padding;
+            d += padding;
         }
 
         current_bytes_avx = _mm256_set_epi64x(0,0,0,0);
@@ -513,15 +512,15 @@ public:
         //std::cout << "all lengths register: " << v0_arr[0] << ' ' << v0_arr[1] << ' ' << v0_arr[2] << ' ' << v0_arr[3] << std::endl; 
 
         for (int i = 0; i < 4; ++i) {
-            while (data[i].data + 8 <= end[i]) {
-                current_word = unalignedLoadLittleEndian<UInt64>(data[i].data);
+            while (data[i] + 8 <= end[i]) {
+                current_word = unalignedLoadLittleEndian<UInt64>(data[i]);
 
                 v3_arr[i] ^= current_word;
                 SIPROUND_ARR(i);
                 SIPROUND_ARR(i);
                 v0_arr[i] ^= current_word;
 
-                data[i].data += 8;
+                data[i] += 8;
             }
         }
 
@@ -539,15 +538,15 @@ public:
             } else {
                 tmp = current_bytes_3;
             }
-            switch (end[i] - data[i].data)
+            switch (end[i] - data[i])
             {
-                case 7: tmp[CURRENT_BYTES_IDX(6)] = data[i].data[6]; [[fallthrough]];
-                case 6: tmp[CURRENT_BYTES_IDX(5)] = data[i].data[5]; [[fallthrough]];
-                case 5: tmp[CURRENT_BYTES_IDX(4)] = data[i].data[4]; [[fallthrough]];
-                case 4: tmp[CURRENT_BYTES_IDX(3)] = data[i].data[3]; [[fallthrough]];
-                case 3: tmp[CURRENT_BYTES_IDX(2)] = data[i].data[2]; [[fallthrough]];
-                case 2: tmp[CURRENT_BYTES_IDX(1)] = data[i].data[1]; [[fallthrough]];
-                case 1: tmp[CURRENT_BYTES_IDX(0)] = data[i].data[0]; [[fallthrough]];
+                case 7: tmp[CURRENT_BYTES_IDX(6)] = data[i][6]; [[fallthrough]];
+                case 6: tmp[CURRENT_BYTES_IDX(5)] = data[i][5]; [[fallthrough]];
+                case 5: tmp[CURRENT_BYTES_IDX(4)] = data[i][4]; [[fallthrough]];
+                case 4: tmp[CURRENT_BYTES_IDX(3)] = data[i][3]; [[fallthrough]];
+                case 3: tmp[CURRENT_BYTES_IDX(2)] = data[i][2]; [[fallthrough]];
+                case 2: tmp[CURRENT_BYTES_IDX(1)] = data[i][1]; [[fallthrough]];
+                case 1: tmp[CURRENT_BYTES_IDX(0)] = data[i][0]; [[fallthrough]];
                 case 0: break;
             }
         }
@@ -631,10 +630,35 @@ public:
         else
             update(reinterpret_cast<const char *>(&x), sizeof(x)); /// NOLINT
     }
+
+    template <typename Transform = void, typename T>
+    ALWAYS_INLINE void updateSameLength(const std::array<T, 4> & v)
+    {
+        if constexpr (std::endian::native == std::endian::big)
+        {
+            std::array<T, 4> result = v;
+            if constexpr (!std::is_same_v<Transform, void>)
+                for (int i = 0; i < 4; ++i) {
+                    result[i] = Transform()(v[i]);
+                }
+            else
+                DB::transformEndianness<std::endian::little>(result);
+ 
+            updateSameLength(result); /// NOLINT
+        }
+        else
+            updateSameLength(v); /// NOLINT
+    }
+
  
     ALWAYS_INLINE void update(const std::string & x) { update(x.data(), x.length()); }
     ALWAYS_INLINE void update(const std::string_view x) { update(x.data(), x.size()); }
     ALWAYS_INLINE void update(const char * s) { update(std::string_view(s)); }
+
+    ALWAYS_INLINE void updateSameLength(std::array<std::string, 4> & x) { updateSameLength({x[0].data(), x[1].data(), x[2].data(), x[3].data()}, x[0].size()); }
+    ALWAYS_INLINE void updateSameLength(std::array<std::string_view, 4>& x) { updateSameLength({x[0].data(), x[1].data(), x[2].data(), x[3].data()}, x[0].size()); }
+    ALWAYS_INLINE void updateSameLength(std::array<const char*, 4>& x) { updateSameLength(x, strlen(x[0]));}
+
 
     __attribute__((__target__("avx512vl,avx512f,avx512bw"))) ALWAYS_INLINE void extractCF()
     {
@@ -782,11 +806,7 @@ __attribute__((__target__("avx512vl,avx512f,avx512bw"))) inline std::array<UInt6
     //std::cout << " constructor " << std::endl;
     SipHashAvx hash;
     //std::cout << " start func " << std::endl;
-    std::array<SipHashAvx::StringPtr, 4> data1;
-    for (size_t i = 0; i < 4; ++i) {
-        data1[i].data = data[i];
-    }
-    hash.updateSameLength(data1, size);
+    hash.updateSameLength(data, size);
     return hash.get64Array();
 }
 
@@ -795,11 +815,7 @@ __attribute__((__target__("avx512vl,avx512f,avx512bw"))) inline std::array<UInt6
     //std::cout << " constructor " << std::endl;
     SipHashAvx hash;
     //std::cout << " start func " << std::endl;
-    std::array<SipHashAvx::StringPtr, 4> data1;
-    for (size_t i = 0; i < 4; ++i) {
-        data1[i].data = data[i];
-    }
-    hash.updateAllLength(data1, szs);
+    hash.updateAllLength(data, szs);
     return hash.get64ArrayAllLength();
 }
 
