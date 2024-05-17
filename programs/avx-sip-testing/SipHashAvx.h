@@ -52,19 +52,19 @@ namespace DB::ErrorCodes
 #define SIPROUND_AVX                                               \
     do                                                              \
     {                                                               \
-        v0_avx += v1_avx;                  \
+        v0_avx = _mm256_add_epi64(v0_avx, v1_avx);                  \
         v1_avx = _mm256_rol_epi64(v1_avx, 13);                      \
-        v1_avx ^= v0_avx;                  \
+        v1_avx = _mm256_xor_epi64(v1_avx, v0_avx);                  \
         v0_avx = _mm256_rol_epi64(v0_avx, 32);                      \
-        v2_avx += v3_avx;                  \
+        v2_avx = _mm256_add_epi64(v2_avx, v3_avx);                  \
         v3_avx = _mm256_rol_epi64(v3_avx, 16);                      \
-        v3_avx ^= v2_avx;                  \
-        v0_avx += v3_avx;                  \
+        v3_avx = _mm256_xor_epi64(v3_avx, v2_avx);                  \
+        v0_avx = _mm256_add_epi64(v0_avx, v3_avx);                  \
         v3_avx = _mm256_rol_epi64(v3_avx, 21);                      \
-        v3_avx ^= v0_avx;                  \
-        v2_avx += v1_avx;                  \
+        v3_avx = _mm256_xor_epi64(v3_avx, v0_avx);                  \
+        v2_avx = _mm256_add_epi64(v2_avx, v1_avx);                  \
         v1_avx = _mm256_rol_epi64(v1_avx, 17);                      \
-        v1_avx ^= v2_avx;                  \
+        v1_avx = _mm256_xor_epi64(v1_avx, v2_avx);                  \
         v2_avx = _mm256_rol_epi64(v2_avx, 32);                      \
     } while(0)
 
@@ -230,16 +230,16 @@ private:
 
         UInt64 x = 8 * CURRENT_BYTES_IDX(7);
         UInt64 vl = MAX64 ^ (255ull << x);
-        current_bytes_avx &= _mm256_set_epi64x(vl, vl, vl, vl);
-        current_bytes_avx |= _mm256_set_epi64x(cnt << x, cnt << x, cnt << x, cnt << x);
+        current_bytes_avx = _mm256_and_epi64(current_bytes_avx, _mm256_set_epi64x(vl, vl, vl, vl));
+        current_bytes_avx = _mm256_or_epi64(current_bytes_avx, _mm256_set_epi64x(cnt << x, cnt << x, cnt << x, cnt << x));
 
         //print("current_bytes_avx", current_bytes_avx); 
-        v3_avx ^= current_bytes_avx;
+        v3_avx = _mm256_xor_epi64(v3_avx, current_bytes_avx);
         SIPROUND_AVX;
         SIPROUND_AVX;
-        v0_avx ^= current_bytes_avx;
+        v0_avx = _mm256_xor_epi64(v0_avx, current_bytes_avx);
  
-        v2_avx ^= _mm256_set_epi64x(0xff, 0xff, 0xff, 0xff);
+        v2_avx = _mm256_xor_epi64(v2_avx, _mm256_set_epi64x(0xff, 0xff, 0xff, 0xff));
  
         SIPROUND_AVX;
         SIPROUND_AVX;
@@ -312,10 +312,10 @@ public:
                     fix_val
                 );
                 __m256i avx_to_set = _mm256_set_epi64x(
-                    (*data[0]++) << (8 * byte),
-                    (*data[1]++) << (8 * byte),
-                    (*data[2]++) << (8 * byte),
-                    (*data[3]++) << (8 * byte)
+                    static_cast<UInt64>(*data[3]++) << (8 * byte),
+                    static_cast<UInt64>(*data[2]++) << (8 * byte),
+                    static_cast<UInt64>(*data[1]++) << (8 * byte),
+                    static_cast<UInt64>(*data[0]++) << (8 * byte)
                 );
                 current_bytes_avx &= current_avx;
                 current_bytes_avx |= avx_to_set;
@@ -326,10 +326,10 @@ public:
             if (cnt & 7)
                 return;
  
-            v3_avx ^= current_bytes_avx;
+            v3_avx = _mm256_xor_epi64(v3_avx, current_bytes_avx);
             SIPROUND_AVX;
             SIPROUND_AVX;
-            v0_avx ^= current_bytes_avx;
+            v0_avx = _mm256_xor_epi64(v0_avx, current_bytes_avx);
         }
  
         cnt += size - inc;
@@ -339,27 +339,24 @@ public:
         //UInt64 padding = 0;
         while (data[0] + 8 <= end)
         {
-            current_bytes_avx = _mm256_set_epi64x(
-                unalignedLoadLittleEndian<UInt64>(data[0]),
-                unalignedLoadLittleEndian<UInt64>(data[1]),
+             current_bytes_avx = _mm256_set_epi64x(
+                unalignedLoadLittleEndian<UInt64>(data[3]),
                 unalignedLoadLittleEndian<UInt64>(data[2]),
-                unalignedLoadLittleEndian<UInt64>(data[3])
+                unalignedLoadLittleEndian<UInt64>(data[1]),
+                unalignedLoadLittleEndian<UInt64>(data[0])
             );
             data[0] += 8;
             data[1] += 8;
             data[2] += 8;
             data[3] += 8;
-            //print("after iteration upload, current bytes", current_bytes_avx);
 
 
-
-            v3_avx ^= current_bytes_avx;
+            v3_avx = _mm256_xor_epi64(v3_avx, current_bytes_avx);
             SIPROUND_AVX;
             SIPROUND_AVX;
-            //print("after iteration SIPROUND_AVX", current_bytes_avx);
             //print("check v0_avx after iteration before XOR", v0_avx);
 
-            v0_avx ^= current_bytes_avx;
+            v0_avx = _mm256_xor_epi64(v0_avx, current_bytes_avx);
             //print("check v0_avx after iteration", v0_avx);
             inc += 8;
             //padding += 8;
@@ -373,56 +370,40 @@ public:
 
         current_bytes_avx = _mm256_set_epi64x(0,0,0,0);
 
-        // print("register here ", v0_avx);
         /// Pad the remainder, which is missing up to an 8-byte word.
-        switch (size - inc)
+        switch (end - data[0])
         {
             case 7: {
                 UInt64 x = 8 * CURRENT_BYTES_IDX(6);
-                UInt64 vl = MAX64 ^ (255ull << x);
-                current_bytes_avx &= _mm256_set_epi64x(vl, vl, vl, vl);
-                current_bytes_avx |= _mm256_set_epi64x(data[0][6] << x, data[1][6] << x, data[2][6] << x, data[3][6] << x);
+                current_bytes_avx |= _mm256_set_epi64x(static_cast<UInt64>(data[3][6]) << x, static_cast<UInt64>(data[2][6]) << x, static_cast<UInt64>(data[1][6]) << x, static_cast<UInt64>(data[0][6]) << x);
             } [[fallthrough]];
             case 6: {
                 UInt64 x = 8 * CURRENT_BYTES_IDX(5);
-                UInt64 vl = MAX64 ^ (255ull << x);
-                current_bytes_avx &= _mm256_set_epi64x(vl, vl, vl, vl);
-                current_bytes_avx |= _mm256_set_epi64x(data[0][5] << x, data[1][5] << x, data[2][5] << x, data[3][5] << x);
-
+                current_bytes_avx |= _mm256_set_epi64x(static_cast<UInt64>(data[3][5]) << x, static_cast<UInt64>(data[2][5]) << x, static_cast<UInt64>(data[1][5]) << x, static_cast<UInt64>(data[0][5]) << x);
             } [[fallthrough]];
             case 5: {
                 UInt64 x = 8 * CURRENT_BYTES_IDX(4);
-                UInt64 vl = MAX64 ^ (255ull << x);
-                current_bytes_avx &= _mm256_set_epi64x(vl, vl, vl, vl);
-                current_bytes_avx |= _mm256_set_epi64x(data[0][4]<< x, data[1][4]<< x, data[2][4]<< x, data[3][4]<< x);
+                current_bytes_avx |= _mm256_set_epi64x(static_cast<UInt64>(data[3][4]) << x, static_cast<UInt64>(data[2][4]) << x, static_cast<UInt64>(data[1][4]) << x, static_cast<UInt64>(data[0][4]) << x);
             } [[fallthrough]];
             case 4: { 
                 UInt64 x = 8 * CURRENT_BYTES_IDX(3);
-                UInt64 vl = MAX64 ^ (255ull << x);
-                current_bytes_avx &= _mm256_set_epi64x(vl, vl, vl, vl);
-                current_bytes_avx |= _mm256_set_epi64x(data[0][3]<< x, data[1][3]<< x, data[2][3]<< x, data[3][3]<< x);
+                current_bytes_avx |= _mm256_set_epi64x(static_cast<UInt64>(data[3][3]) << x, static_cast<UInt64>(data[2][3]) << x, static_cast<UInt64>(data[1][3]) << x, static_cast<UInt64>(data[0][3]) << x);
             }[[fallthrough]];
             case 3: {
                 UInt64 x = 8 * CURRENT_BYTES_IDX(2);
-                UInt64 vl = MAX64 ^ (255ull << x);
-                current_bytes_avx &= _mm256_set_epi64x(vl, vl, vl, vl);
-                current_bytes_avx |= _mm256_set_epi64x(data[0][2]<< x, data[1][2]<< x, data[2][2]<< x, data[3][2]<< x);
+                current_bytes_avx |= _mm256_set_epi64x(static_cast<UInt64>(data[3][2]) << x, static_cast<UInt64>(data[2][2]) << x, static_cast<UInt64>(data[1][2]) << x, static_cast<UInt64>(data[0][2]) << x);
             }[[fallthrough]];
             case 2: {
                 UInt64 x = 8 * CURRENT_BYTES_IDX(1);
-                UInt64 vl = MAX64 ^ (255ull << x);
-                current_bytes_avx &= _mm256_set_epi64x(vl, vl, vl, vl);
-                current_bytes_avx |= _mm256_set_epi64x(data[0][1]<< x, data[1][1]<< x, data[2][1]<< x, data[3][1]<< x);
+                current_bytes_avx |= _mm256_set_epi64x(static_cast<UInt64>(data[3][1]) << x, static_cast<UInt64>(data[2][1]) << x, static_cast<UInt64>(data[1][1]) << x, static_cast<UInt64>(data[0][1]) << x);
             }[[fallthrough]];
             case 1: {
                 UInt64 x = 8 * CURRENT_BYTES_IDX(0);
-                UInt64 vl = MAX64 ^ (255ull << x);
-                current_bytes_avx &= _mm256_set_epi64x(vl, vl, vl, vl);
-                current_bytes_avx |= _mm256_set_epi64x(data[0][0]<< x, data[1][0]<< x, data[2][0]<< x, data[3][0]<< x);
+                current_bytes_avx |= _mm256_set_epi64x(static_cast<UInt64>(data[3][0]) << x, static_cast<UInt64>(data[2][0]) << x, static_cast<UInt64>(data[1][0]) << x, static_cast<UInt64>(data[0][0]) << x);
+
             } [[fallthrough]];
             case 0: break;
         }
-        //print("after update current bytes avx", current_bytes_avx);
     }
 
     __attribute__((__target__("avx512vl,avx512f,avx512bw"))) ALWAYS_INLINE bool updateAllLength(std::array<const char*, 4> data, std::array<UInt64, 4> szs)
@@ -467,10 +448,10 @@ public:
             }
         }
 
-        v0_avx = _mm256_set_epi64x(v0_arr[0], v0_arr[1], v0_arr[2], v0_arr[3]);
-        v1_avx = _mm256_set_epi64x(v1_arr[0], v1_arr[1], v1_arr[2], v1_arr[3]);
-        v2_avx = _mm256_set_epi64x(v2_arr[0], v2_arr[1], v2_arr[2], v2_arr[3]);
-        v3_avx = _mm256_set_epi64x(v3_arr[0], v3_arr[1], v3_arr[2], v3_arr[3]);
+        v0_avx = _mm256_set_epi64x(v0_arr[3], v0_arr[2], v0_arr[1], v0_arr[0]);
+        v1_avx = _mm256_set_epi64x(v1_arr[3], v1_arr[2], v1_arr[1], v1_arr[0]);
+        v2_avx = _mm256_set_epi64x(v2_arr[3], v2_arr[2], v2_arr[1], v2_arr[0]);
+        v3_avx = _mm256_set_epi64x(v3_arr[3], v3_arr[2], v3_arr[1], v3_arr[0]);
 
         cnt_arr[0] = cnt_arr[1] = cnt_arr[2] = cnt_arr[3] = cnt;
         cnt_arr[0] += end[0] - data[0];
@@ -482,10 +463,10 @@ public:
         while (inc + 8 <= min_sz)
         {
             current_bytes_avx = _mm256_set_epi64x(
-                unalignedLoadLittleEndian<UInt64>(data[0] + padding),
-                unalignedLoadLittleEndian<UInt64>(data[1] + padding),
+                unalignedLoadLittleEndian<UInt64>(data[3] + padding),
                 unalignedLoadLittleEndian<UInt64>(data[2] + padding),
-                unalignedLoadLittleEndian<UInt64>(data[3] + padding)
+                unalignedLoadLittleEndian<UInt64>(data[1] + padding),
+                unalignedLoadLittleEndian<UInt64>(data[0] + padding)
             );
             //print("after iteration upload, current bytes", current_bytes_avx);
 
@@ -585,8 +566,6 @@ public:
         {
             current_word = unalignedLoadLittleEndian<UInt64>(data);
 
-       //     std::cout << " current_word: " << current_word << std::endl;
-
             v3 ^= current_word;
             SIPROUND;
             SIPROUND;
@@ -603,7 +582,7 @@ public:
         current_word = 0;
         switch (end - data)
         {
-            case 7: current_bytes[CURRENT_BYTES_IDX(6)] = data[6]; [[fallthrough]];
+            case 7: current_bytes[CURRENT_BYTES_IDX(6)] = data[6]; [[fallthrough]]; 
             case 6: current_bytes[CURRENT_BYTES_IDX(5)] = data[5]; [[fallthrough]];
             case 5: current_bytes[CURRENT_BYTES_IDX(4)] = data[4]; [[fallthrough]];
             case 4: current_bytes[CURRENT_BYTES_IDX(3)] = data[3]; [[fallthrough]];
@@ -687,7 +666,6 @@ public:
 
         __m256i res = v0_avx ^ v1_avx ^ v2_avx ^ v3_avx;
 
-        //print("before drop result", res);
         return {static_cast<UInt64>(_mm256_extract_epi64(res, 0)), static_cast<UInt64>(_mm256_extract_epi64(res, 1)),static_cast<UInt64>(_mm256_extract_epi64(res, 2)), static_cast<UInt64>(_mm256_extract_epi64(res, 3))};
     }
 
