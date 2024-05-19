@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <iostream>
@@ -154,6 +155,29 @@ std::vector<UInt64> check_correctness_default(std::vector<std::string>& v) {
     return result;
 }
 
+std::vector<UInt64> separate_array(std::vector<std::string>& v, size_t c = 40) {
+    size_t el = std::count_if(v.begin(), v.end(), [&](auto& x) {
+        return x.size() < c;
+    });
+    std::nth_element(v.begin(), v.begin() + el, v.end());
+    std::vector<UInt64> result(v.size());
+    for (size_t i = 0; i < el; ++i) {
+        result[i] = SipHashAvx64(v[i].data(), v[i].size());
+    }
+    for (size_t i = el; i < v.size(); i += 4) {
+        if (i + 4 <= v.size()) {
+            auto x = SipHashAvx64ArrayStrAllLength({v[i].data(), v[i + 1].data(), v[i + 2].data(), v[i + 3].data()}, {v[i].size(), v[i + 1].size(), v[i + 2].size(), v[i + 3].size()});
+            result[i++] = x[0];
+            result[i++] = x[1];
+            result[i++] = x[2];
+            result[i] = x[3];
+        } else {
+            result[i] = SipHashAvx64(v[i].data(), v[i].size());
+        }
+    }
+    return result;
+}
+
 void check_speed_vec(size_t cnt) {
     auto v = gen_same_sz_vec(cnt);
     std::cout << "Speed check with vector of size cnt = " << cnt << '\n';
@@ -222,13 +246,11 @@ std::vector<UInt64> algo3(std::vector<std::string>& v) {
 
     for (size_t i = 0; i < v.size(); ++i) {
         if (i + 4 <= v.size()) {
-            if (v[i + 3].size() == v[i].size()) {
-                auto x = SipHashAvx64ArrayStr({v[i].data(), v[i + 1].data(), v[i + 2].data(), v[i + 3].data()}, v[i].size());
-                result[i++] = x[0];
-                result[i++] = x[1];
-                result[i++] = x[2];
-                result[i] = x[3];
-            }
+            auto x = SipHashAvx64ArrayStrAllLength({v[i].data(), v[i + 1].data(), v[i + 2].data(), v[i + 3].data()}, {v[i].size(), v[i + 1].size(), v[i + 2].size(), v[i + 3].size()});
+            result[i++] = x[0];
+            result[i++] = x[1];
+            result[i++] = x[2];
+            result[i] = x[3];
         } else {
             result[i] = SipHashAvx64(v[i].data(), v[i].size());
         }
